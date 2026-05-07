@@ -9,7 +9,7 @@ def export_markdown_to_pdf(md_content: str, output_path: str):
     try:
         html_content = markdown.markdown(md_content)
         # Add basic styling for better UI presentation in the PDF
-        styled_html = f\"\"\"
+        styled_html = f"""
         <html>
         <head>
             <style>
@@ -24,7 +24,7 @@ def export_markdown_to_pdf(md_content: str, output_path: str):
             {html_content}
         </body>
         </html>
-        \"\"\"
+        """
         pdfkit.from_string(styled_html, output_path)
     except Exception as e:
         print(f"Failed to export to PDF. Make sure wkhtmltopdf is installed on your system. Error: {e}")
