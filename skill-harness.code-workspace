@@ -1,0 +1,13 @@
+{
+	"folders": [
+		{
+			"path": "."
+		}
+	],
+	"settings": {
+		"python.defaultInterpreterPath": "${workspaceFolder}/demo_agent/.venv/bin/python",
+		"python.analysis.extraPaths": [
+			"${workspaceFolder}/demo_agent/src"
+		]
+	}
+}

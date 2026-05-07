@@ -1,8 +1,9 @@
-from google.adk.agents import WorkflowAgent, LlmAgent
+from google.adk.agents import LlmAgent
+from google.adk.workflow import Workflow, Edge, START
 
-def create_report_workflow() -> WorkflowAgent:
+def create_report_workflow() -> Workflow:
     """
-    Creates a graph-based workflow using ADK 2.0 WorkflowAgent 
+    Creates a graph-based workflow using ADK 2.0 Workflow 
     to generate research reports.
     """
     
@@ -11,10 +12,24 @@ def create_report_workflow() -> WorkflowAgent:
     intent_analyzer = LlmAgent(
         name="IntentAnalyzer",
         instruction=(
-            "Analyze the user's prompt. If it is a request to generate "
-            "a report or gather information on a topic, extract the topic "
-            "and output the intent as 'generate_report'. "
-            "Otherwise, output 'standard'."
+            "Analyze the user's prompt. "
+            "If it is a request to generate a report or gather information on a topic, "
+            "output ONLY the exact string 'generate_report'. "
+            "If the user is asking what you can do, for help, or general guidance, "
+            "output ONLY the exact string 'guidance'."
+        )
+    )
+
+    # 1.5 Guidance Agent
+    # Provides help and explains capabilities to the user.
+    guidance_agent = LlmAgent(
+        name="GuidanceAgent",
+        instruction=(
+            "You are a helpful assistant. The user is asking what you can do. "
+            "Explain that you are a Report Generation Workflow Agent. "
+            "You can research any topic by searching the web, gather relevant data points, "
+            "and synthesize a fully formatted Markdown report with citations. "
+            "Provide guidance to the user to just ask for a report on their desired topic."
         )
     )
 
@@ -56,14 +71,14 @@ def create_report_workflow() -> WorkflowAgent:
     )
 
     # 5. Define the Graph (Nodes and Edges)
-    workflow = WorkflowAgent(
+    workflow = Workflow(
         name="report_generation_workflow",
-        nodes=[intent_analyzer, web_search_agent, report_generator, ui_synthesizer],
         edges=[
-            ("START", "IntentAnalyzer"), # Unconditional edge starting the graph
-            ("IntentAnalyzer", "WebSearchAgent", "generate_report"), # Conditional edge based on intent
-            ("WebSearchAgent", "ReportGenerator"), # Proceed to generate the report
-            ("ReportGenerator", "UISynthesizer") # Finalize formatting for the UI
+            Edge(from_node=START, to_node=intent_analyzer),
+            Edge(from_node=intent_analyzer, to_node=web_search_agent, route="generate_report"),
+            Edge(from_node=intent_analyzer, to_node=guidance_agent, route="guidance"),
+            Edge(from_node=web_search_agent, to_node=report_generator),
+            Edge(from_node=report_generator, to_node=ui_synthesizer)
         ]
     )
     
