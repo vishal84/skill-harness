@@ -1,172 +1,183 @@
-#!/usr/bin/env python3
 """
 deploy.py — Deploy the ADK 2.0 Report Generation agent to Vertex AI Agent Engine.
+
+Uses the same pattern as the knowledge-graph-agent deploy script:
+  AdkApp + vertexai.Client + agent_engines.create/update
 
 Usage:
     # Create a new Agent Engine instance
     python deploy.py
 
-    # Update an existing Agent Engine instance
-    python deploy.py --agent-engine-id <RESOURCE_ID>
-
-    # Override project / region
-    python deploy.py --project my-project --region us-central1
-
-    # Dry-run (stage files only, do not deploy)
-    python deploy.py --dry-run
+    # Update an existing Agent Engine instance (set AGENT_ENGINE_ID in .env)
+    python deploy.py
 
 Prerequisites:
-    1. gcloud CLI authenticated:    gcloud auth login
-    2. ADC for Python SDK:          gcloud auth application-default login
-    3. Vertex AI API enabled:       gcloud services enable aiplatform.googleapis.com
-    4. .env in src/ with GOOGLE_CLOUD_PROJECT and GOOGLE_CLOUD_LOCATION
+    1. gcloud auth application-default login
+    2. Vertex AI API enabled on the project
+    3. A GCS staging bucket (set STAGING_BUCKET in .env)
 """
 
-from __future__ import annotations
-
-import argparse
 import os
 import sys
+import logging
+from datetime import datetime
+
+import vertexai
+from vertexai.agent_engines import AdkApp
+from dotenv import load_dotenv, dotenv_values, set_key
 
 # ---------------------------------------------------------------------------
-# Resolve paths
+# Ensure local src/ is importable so we can reference root_agent
 # ---------------------------------------------------------------------------
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-AGENT_FOLDER = os.path.join(SCRIPT_DIR, "src")           # the ADK agent root
-ENV_FILE = os.path.join(SCRIPT_DIR, ".env")               # project-level .env
+SRC_DIR = os.path.join(SCRIPT_DIR, "src")
+sys.path.insert(0, SRC_DIR)
+
+from agents.report_workflow import create_report_workflow  # noqa: E402
 
 
-def _load_env_defaults() -> dict[str, str]:
-    """Read key=value pairs from .env (ignoring comments and blanks)."""
-    defaults: dict[str, str] = {}
-    if not os.path.exists(ENV_FILE):
-        return defaults
-    with open(ENV_FILE) as f:
-        for line in f:
-            line = line.strip()
-            if not line or line.startswith("#"):
-                continue
-            key, _, value = line.partition("=")
-            defaults[key.strip()] = value.strip()
-    return defaults
+# ---------------------------------------------------------------------------
+# Config builder
+# ---------------------------------------------------------------------------
+def _build_agent_engine_config(
+    *,
+    gcs_dir_name: str,
+    staging_bucket: str,
+    google_cloud_location: str,
+):
+    return dict(
+        agent_framework="google-adk",
+        display_name="Report Generation Workflow",
+        description="ADK 2.0 graph workflow: intent routing → web search → report → markdown table",
+        staging_bucket=staging_bucket,
+        gcs_dir_name=gcs_dir_name,
+        extra_packages=["./src"],
+        requirements=[
+            "google-adk>=2.0.0b1",
+            "google-cloud-aiplatform[adk,agent_engines]",
+            "markdown>=3.4.0",
+        ],
+        env_vars={
+            "GOOGLE_CLOUD_LOCATION": google_cloud_location,
+            "GOOGLE_GENAI_USE_VERTEXAI": "1",
+        },
+    )
 
 
-def parse_args() -> argparse.Namespace:
-    env = _load_env_defaults()
-    parser = argparse.ArgumentParser(
-        description="Deploy ADK agent to Vertex AI Agent Engine",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-    )
-    parser.add_argument(
-        "--project",
-        default=env.get("GOOGLE_CLOUD_PROJECT"),
-        help="GCP project ID  (default: from .env GOOGLE_CLOUD_PROJECT)",
-    )
-    parser.add_argument(
-        "--region",
-        default=env.get("GOOGLE_CLOUD_LOCATION", "us-central1"),
-        help="GCP region       (default: from .env GOOGLE_CLOUD_LOCATION)",
-    )
-    parser.add_argument(
-        "--display-name",
-        default="report-generation-workflow",
-        help="Display name shown in the Cloud Console",
-    )
-    parser.add_argument(
-        "--description",
-        default="ADK 2.0 graph workflow: intent routing → web search → report → markdown table",
-        help="Description for the Agent Engine resource",
-    )
-    parser.add_argument(
-        "--agent-engine-id",
-        default=None,
-        help="Existing Agent Engine resource ID to update (omit to create new)",
-    )
-    parser.add_argument(
-        "--trace-to-cloud",
-        action="store_true",
-        default=True,
-        help="Enable Cloud Trace for the deployed agent",
-    )
-    parser.add_argument(
-        "--dry-run",
-        action="store_true",
-        help="Stage files and validate but do NOT deploy",
-    )
-    return parser.parse_args()
+# ---------------------------------------------------------------------------
+# Resolve existing engine (update vs create)
+# ---------------------------------------------------------------------------
+def _resolve_existing_agent_engine(client, agent_engine_id, logger):
+    if not agent_engine_id:
+        return None
 
-
-def preflight_checks(project: str | None, region: str | None) -> None:
-    """Validate the environment before attempting deployment."""
-    errors: list[str] = []
-
-    if not project:
-        errors.append(
-            "No GCP project. Set GOOGLE_CLOUD_PROJECT in .env or pass --project."
+    if "/reasoningEngines/" not in agent_engine_id:
+        logger.warning(
+            "AGENT_ENGINE_ID is set but is not a valid resource name: %s",
+            agent_engine_id,
         )
-    if not region:
-        errors.append(
-            "No GCP region. Set GOOGLE_CLOUD_LOCATION in .env or pass --region."
+        return None
+
+    try:
+        client.agent_engines.get(name=agent_engine_id)
+        logger.info("Found existing Agent Engine: %s", agent_engine_id)
+        return agent_engine_id
+    except Exception as exc:
+        logger.warning(
+            "AGENT_ENGINE_ID set but not fetchable — will create new. id=%s error=%s",
+            agent_engine_id,
+            exc,
         )
+        return None
 
-    agent_py = os.path.join(AGENT_FOLDER, "agent.py")
-    if not os.path.isfile(agent_py):
-        errors.append(f"agent.py not found at {agent_py}")
 
-    req_txt = os.path.join(AGENT_FOLDER, "requirements.txt")
-    if not os.path.isfile(req_txt):
-        errors.append(
-            f"requirements.txt not found at {req_txt}. "
-            "Agent Engine needs this to install dependencies on the server."
-        )
+# ---------------------------------------------------------------------------
+# Deploy
+# ---------------------------------------------------------------------------
+def deploy():
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(message)s",
+    )
+    logger = logging.getLogger(__name__)
 
-    if errors:
-        print("❌  Preflight failed:\n")
-        for err in errors:
-            print(f"   • {err}")
+    # Load .env
+    env_path = os.path.join(SCRIPT_DIR, ".env")
+    load_dotenv(dotenv_path=env_path)
+    env_vars = dotenv_values(dotenv_path=env_path)
+
+    GOOGLE_CLOUD_PROJECT = env_vars.get("GOOGLE_CLOUD_PROJECT")
+    GOOGLE_CLOUD_LOCATION = env_vars.get("GOOGLE_CLOUD_LOCATION", "us-central1")
+    STAGING_BUCKET = env_vars.get("STAGING_BUCKET")
+    AGENT_ENGINE_ID = env_vars.get("AGENT_ENGINE_ID")
+
+    if not GOOGLE_CLOUD_PROJECT:
+        logger.error("GOOGLE_CLOUD_PROJECT not set in .env")
+        sys.exit(1)
+    if not STAGING_BUCKET:
+        logger.error("STAGING_BUCKET not set in .env  (e.g. gs://my-bucket)")
         sys.exit(1)
 
-    print(f"✅  Project:  {project}")
-    print(f"✅  Region:   {region}")
-    print(f"✅  Agent:    {AGENT_FOLDER}")
+    gcs_dir_name = f"report-agent-{datetime.utcnow().strftime('%Y%m%d-%H%M%S')}"
 
-
-def deploy(args: argparse.Namespace) -> None:
-    """Run the deployment via the ADK CLI deploy module."""
-    from google.adk.cli.cli_deploy import to_agent_engine
-
-    print("\n" + "=" * 60)
-    print("  Deploying to Vertex AI Agent Engine")
-    print("=" * 60 + "\n")
-
-    to_agent_engine(
-        agent_folder=AGENT_FOLDER,
-        adk_app="app",                           # generated entrypoint filename
-        project=args.project,
-        region=args.region,
-        display_name=args.display_name,
-        description=args.description,
-        agent_engine_id=args.agent_engine_id,     # None → create new
-        trace_to_cloud=args.trace_to_cloud,
-        env_file=ENV_FILE,
-        adk_app_object="root_agent",              # matches src/agent.py
-        skip_agent_import_validation=True,        # avoids local import issues
+    # Build the ADK app from our root_agent
+    root_agent = create_report_workflow()
+    deployment_app = AdkApp(
+        agent=root_agent,
+        enable_tracing=True,
     )
 
+    logger.info(
+        "Initializing Vertex AI — project=%s  location=%s  bucket=%s",
+        GOOGLE_CLOUD_PROJECT,
+        GOOGLE_CLOUD_LOCATION,
+        STAGING_BUCKET,
+    )
 
-def main() -> None:
-    args = parse_args()
+    vertexai.init(
+        project=GOOGLE_CLOUD_PROJECT,
+        location=GOOGLE_CLOUD_LOCATION,
+        staging_bucket=STAGING_BUCKET,
+    )
 
-    print("\n🚀  ADK Agent Engine Deployment\n")
-    preflight_checks(args.project, args.region)
+    client = vertexai.Client(
+        project=GOOGLE_CLOUD_PROJECT,
+        location=GOOGLE_CLOUD_LOCATION,
+    )
 
-    if args.dry_run:
-        print("\n🔍  Dry-run complete — skipping actual deployment.")
-        return
+    config = _build_agent_engine_config(
+        gcs_dir_name=gcs_dir_name,
+        staging_bucket=STAGING_BUCKET,
+        google_cloud_location=GOOGLE_CLOUD_LOCATION,
+    )
 
-    deploy(args)
-    print("\n✅  Deployment complete.\n")
+    existing = _resolve_existing_agent_engine(client, AGENT_ENGINE_ID, logger)
+
+    if existing:
+        logger.info("Updating existing Agent Engine: %s", existing)
+        remote_app = client.agent_engines.update(
+            name=existing,
+            agent=deployment_app,
+            config=config,
+        )
+    else:
+        logger.info("Creating new Agent Engine deployment")
+        remote_app = client.agent_engines.create(
+            agent=deployment_app,
+            config=config,
+        )
+
+    engine_id = remote_app.api_resource.name
+    logger.info("✅ Deployed successfully — resource: %s", engine_id)
+    print(f"\nAgent Engine ID: {engine_id}")
+
+    # Persist the engine ID back to .env for future updates
+    try:
+        set_key(env_path, "AGENT_ENGINE_ID", engine_id)
+        print(f"Updated AGENT_ENGINE_ID in .env")
+    except Exception as e:
+        print(f"Warning: could not update .env: {e}")
 
 
 if __name__ == "__main__":
-    main()
+    deploy()
