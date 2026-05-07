@@ -24,16 +24,16 @@ from datetime import datetime
 
 import vertexai
 from vertexai.agent_engines import AdkApp
+from google.adk.apps import App
 from dotenv import load_dotenv, dotenv_values, set_key
 
 # ---------------------------------------------------------------------------
-# Ensure local src/ is importable so we can reference root_agent
+# Ensure src is importable as a top-level package (matches server layout)
 # ---------------------------------------------------------------------------
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-SRC_DIR = os.path.join(SCRIPT_DIR, "src")
-sys.path.insert(0, SRC_DIR)
+sys.path.insert(0, SCRIPT_DIR)
 
-from agents.report_workflow import create_report_workflow  # noqa: E402
+from src.agents.report_workflow import create_report_workflow  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
@@ -53,8 +53,8 @@ def _build_agent_engine_config(
         gcs_dir_name=gcs_dir_name,
         extra_packages=["./src"],
         requirements=[
-            "google-adk>=2.0.0b1",
-            "google-cloud-aiplatform[adk,agent_engines]",
+            "google-adk==2.0.0b1",
+            "google-cloud-aiplatform[agent_engines]>=1.148.1",
             "markdown>=3.4.0",
         ],
         env_vars={
@@ -120,10 +120,11 @@ def deploy():
 
     gcs_dir_name = f"report-agent-{datetime.utcnow().strftime('%Y%m%d-%H%M%S')}"
 
-    # Build the ADK app from our root_agent
+    # Build the ADK app — wrap in App with explicit name
     root_agent = create_report_workflow()
+    app = App(name="report_generation_workflow", root_agent=root_agent)
     deployment_app = AdkApp(
-        agent=root_agent,
+        app=app,
         enable_tracing=True,
     )
 

@@ -8,6 +8,7 @@ dependencies = [
     "google-adk>=2.0.0b1",
     "markdown>=3.4.0",
     "pdfkit>=1.0.0",
+    "requests>=2.31.0",
 ]
 
 [build-system]
