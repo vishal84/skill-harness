@@ -1,0 +1,3 @@
+google-adk==2.0.0b1
+google-cloud-aiplatform[adk,agent_engines]
+markdown>=3.4.0
