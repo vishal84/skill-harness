@@ -1,0 +1,36 @@
+# Python / Environments
+.env
+.venv
+env/
+venv/
+ENV/
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+build/
+dist/
+eggs/
+.eggs/
+*.egg-info/
+*.egg
+
+# Google ADK
+.adk/
+
+# Terraform
+.terraform/
+*.tfstate
+*.tfstate.backup
+*.tfvars
+*.tfvars.json
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+
+# OS / Editor
+.DS_Store
+.idea/
+.vscode/
+*.swp

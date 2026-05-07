@@ -1,0 +1,22 @@
+[project]
+name = "demo-agent"
+version = "0.1.0"
+description = "ADK 2.0 Report Generation Demo Agent"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "google-adk>=2.0.0b1",
+    "markdown>=3.4.0",
+    "pdfkit>=1.0.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.uv]
+# If using a private artifact registry, ensure keyring is configured or uncomment below:
+# index-url = "https://us-python.pkg.dev/artifact-foundry-prod/ah-3p-staging-python/simple/"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src"]
