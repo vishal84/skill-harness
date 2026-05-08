@@ -165,14 +165,14 @@ START
   │
   ▼
 ┌─────────────────┐
-│ IntentAnalyzer   │  Classifies user input → "generate_report" or "guidance"
-│ (LlmAgent)       │  Output stored in ctx.state["intent_route"]
+│ IntentAnalyzer  │  Classifies user input → "generate_report" or "guidance"
+│ (LlmAgent)      │  Output stored in ctx.state["intent_route"]
 └────────┬────────┘
          │
          ▼
 ┌─────────────────┐
-│ IntentRouter     │  Reads state, emits EventActions(route=...)
-│ (FunctionNode)   │
+│ IntentRouter    │  Reads state, emits EventActions(route=...)
+│ (FunctionNode)  │
 └──┬───────────┬──┘
    │           │
    │ route:    │ route:
@@ -187,14 +187,14 @@ START
      │
      ▼
 ┌─────────────────┐
-│ReportGenerator   │  Writes comprehensive report with
-│(LlmAgent)        │  title, executive summary, findings
+│ReportGenerator  │  Writes comprehensive report with
+│(LlmAgent)       │  title, executive summary, findings
 └────────┬────────┘
          │
          ▼
 ┌─────────────────┐
-│UISynthesizer     │  Formats as markdown table:
-│(LlmAgent)        │  | # | Category | Finding | Source |
+│UISynthesizer    │  Formats as markdown table:
+│(LlmAgent)       │  | # | Category | Finding | Source |
 └─────────────────┘
 ```
 
