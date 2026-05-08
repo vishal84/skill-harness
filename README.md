@@ -1,4 +1,4 @@
-# Skill Harness — ADK 2.0 Report Generation Agent
+# ADK 2.0 Report Generation Agent
 
 A graph-based, multi-agent report generation workflow built on [Google Agent Development Kit (ADK) 2.0](https://google.github.io/adk-docs/). Given a topic, the agent autonomously searches the web, gathers data, and synthesizes findings into a structured markdown table — all orchestrated as a deterministic DAG with intent-driven routing.
 
